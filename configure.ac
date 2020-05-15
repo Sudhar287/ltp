@@ -55,6 +55,7 @@ AC_CHECK_HEADERS([ \
     linux/netlink.h \
     linux/seccomp.h \
     linux/securebits.h \
+    linux/tty.h \
     linux/types.h \
     linux/userfaultfd.h \
     mm.h \
@@ -300,6 +301,7 @@ LTP_CHECK_CRYPTO
 LTP_CHECK_FORTIFY_SOURCE
 LTP_CHECK_KERNEL_DEVEL
 LTP_CHECK_KEYUTILS_SUPPORT
+LTP_CHECK_LIBMNL
 LTP_CHECK_LINUX_PTRACE
 LTP_CHECK_LINUXRANDOM
 LTP_CHECK_MREMAP_FIXED

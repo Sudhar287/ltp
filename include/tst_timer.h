@@ -15,6 +15,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include "tst_test.h"
+#include "lapi/syscalls.h"
 
 /*
  * Converts timeval to microseconds.
@@ -121,12 +122,95 @@ enum tst_ts_type {
 
 struct tst_ts {
 	enum tst_ts_type type;
-	union {
+	union ts {
 		struct timespec libc_ts;
 		struct __kernel_old_timespec kern_old_ts;
 		struct __kernel_timespec kern_ts;
-	};
+	} ts;
 };
+
+static inline void *tst_ts_get(struct tst_ts *t)
+{
+	if (!t)
+		return NULL;
+
+	switch (t->type) {
+	case TST_LIBC_TIMESPEC:
+		return &t->ts.libc_ts;
+	case TST_KERN_OLD_TIMESPEC:
+		return &t->ts.kern_old_ts;
+	case TST_KERN_TIMESPEC:
+		return &t->ts.kern_ts;
+	default:
+		tst_brk(TBROK, "Invalid type: %d", t->type);
+		return NULL;
+	}
+}
+
+static inline int libc_clock_getres(clockid_t clk_id, void *ts)
+{
+	return clock_getres(clk_id, ts);
+}
+
+static inline int sys_clock_getres(clockid_t clk_id, void *ts)
+{
+	return tst_syscall(__NR_clock_getres, clk_id, ts);
+}
+
+static inline int sys_clock_getres64(clockid_t clk_id, void *ts)
+{
+	return tst_syscall(__NR_clock_getres_time64, clk_id, ts);
+}
+
+static inline int libc_clock_gettime(clockid_t clk_id, void *ts)
+{
+	return clock_gettime(clk_id, ts);
+}
+
+static inline int sys_clock_gettime(clockid_t clk_id, void *ts)
+{
+	return tst_syscall(__NR_clock_gettime, clk_id, ts);
+}
+
+static inline int sys_clock_gettime64(clockid_t clk_id, void *ts)
+{
+	return tst_syscall(__NR_clock_gettime64, clk_id, ts);
+}
+
+static inline int libc_clock_settime(clockid_t clk_id, void *ts)
+{
+	return clock_settime(clk_id, ts);
+}
+
+static inline int sys_clock_settime(clockid_t clk_id, void *ts)
+{
+	return tst_syscall(__NR_clock_settime, clk_id, ts);
+}
+
+static inline int sys_clock_settime64(clockid_t clk_id, void *ts)
+{
+	return tst_syscall(__NR_clock_settime64, clk_id, ts);
+}
+
+static inline int libc_clock_nanosleep(clockid_t clk_id, int flags,
+				       void *request, void *remain)
+{
+	return clock_nanosleep(clk_id, flags, request, remain);
+}
+
+static inline int sys_clock_nanosleep(clockid_t clk_id, int flags,
+				      void *request, void *remain)
+{
+	return tst_syscall(__NR_clock_nanosleep, clk_id, flags,
+			   request, remain);
+}
+
+static inline int sys_clock_nanosleep64(clockid_t clk_id, int flags,
+				        void *request, void *remain)
+{
+	return tst_syscall(__NR_clock_nanosleep_time64, clk_id, flags,
+			   request, remain);
+}
 
 /*
  * Returns tst_ts seconds.
@@ -135,11 +219,11 @@ static inline long long tst_ts_get_sec(struct tst_ts ts)
 {
 	switch (ts.type) {
 	case TST_LIBC_TIMESPEC:
-		return ts.libc_ts.tv_sec;
+		return ts.ts.libc_ts.tv_sec;
 	case TST_KERN_OLD_TIMESPEC:
-		return ts.kern_old_ts.tv_sec;
+		return ts.ts.kern_old_ts.tv_sec;
 	case TST_KERN_TIMESPEC:
-		return ts.kern_ts.tv_sec;
+		return ts.ts.kern_ts.tv_sec;
 	default:
 		tst_brk(TBROK, "Invalid type: %d", ts.type);
 		return -1;
@@ -153,15 +237,36 @@ static inline long long tst_ts_get_nsec(struct tst_ts ts)
 {
 	switch (ts.type) {
 	case TST_LIBC_TIMESPEC:
-		return ts.libc_ts.tv_nsec;
+		return ts.ts.libc_ts.tv_nsec;
 	case TST_KERN_OLD_TIMESPEC:
-		return ts.kern_old_ts.tv_nsec;
+		return ts.ts.kern_old_ts.tv_nsec;
 	case TST_KERN_TIMESPEC:
-		return ts.kern_ts.tv_nsec;
+		return ts.ts.kern_ts.tv_nsec;
 	default:
 		tst_brk(TBROK, "Invalid type: %d", ts.type);
 		return -1;
 	}
+}
+
+/*
+ * Checks that timespec is valid, i.e. that the timestamp is not zero and that
+ * the nanoseconds are normalized i.e. in <0, 1s) interval.
+ *
+ *  0: On success, i.e. timespec updated correctly.
+ * -1: Error, timespec not updated.
+ * -2: Error, tv_nsec is corrupted.
+ */
+static inline int tst_ts_valid(struct tst_ts *t)
+{
+	long long nsec = tst_ts_get_nsec(*t);
+
+	if (nsec < 0 || nsec >= 1000000000)
+		return -2;
+
+	if (tst_ts_get_sec(*t) == 0 && tst_ts_get_nsec(*t) == 0)
+		return -1;
+
+	return 0;
 }
 
 /*
@@ -171,13 +276,13 @@ static inline void tst_ts_set_sec(struct tst_ts *ts, long long sec)
 {
 	switch (ts->type) {
 	case TST_LIBC_TIMESPEC:
-		ts->libc_ts.tv_sec = sec;
+		ts->ts.libc_ts.tv_sec = sec;
 	break;
 	case TST_KERN_OLD_TIMESPEC:
-		ts->kern_old_ts.tv_sec = sec;
+		ts->ts.kern_old_ts.tv_sec = sec;
 	break;
 	case TST_KERN_TIMESPEC:
-		ts->kern_ts.tv_sec = sec;
+		ts->ts.kern_ts.tv_sec = sec;
 	break;
 	default:
 		tst_brk(TBROK, "Invalid type: %d", ts->type);
@@ -191,13 +296,13 @@ static inline void tst_ts_set_nsec(struct tst_ts *ts, long long nsec)
 {
 	switch (ts->type) {
 	case TST_LIBC_TIMESPEC:
-		ts->libc_ts.tv_nsec = nsec;
+		ts->ts.libc_ts.tv_nsec = nsec;
 	break;
 	case TST_KERN_OLD_TIMESPEC:
-		ts->kern_old_ts.tv_nsec = nsec;
+		ts->ts.kern_old_ts.tv_nsec = nsec;
 	break;
 	case TST_KERN_TIMESPEC:
-		ts->kern_ts.tv_nsec = nsec;
+		ts->ts.kern_ts.tv_nsec = nsec;
 	break;
 	default:
 		tst_brk(TBROK, "Invalid type: %d", ts->type);
@@ -211,8 +316,8 @@ static inline struct tst_ts tst_ts_from_timespec(struct timespec ts)
 {
 	struct tst_ts t = {
 		.type = TST_LIBC_TIMESPEC,
-		.libc_ts.tv_sec = ts.tv_sec,
-		.libc_ts.tv_nsec = ts.tv_nsec,
+		.ts.libc_ts.tv_sec = ts.tv_sec,
+		.ts.libc_ts.tv_nsec = ts.tv_nsec,
 	};
 
 	return t;
@@ -223,7 +328,7 @@ static inline struct tst_ts tst_ts_from_timespec(struct timespec ts)
  */
 static inline struct timespec tst_ts_to_timespec(struct tst_ts t)
 {
-	return t.libc_ts;
+	return t.ts.libc_ts;
 }
 
 /*
